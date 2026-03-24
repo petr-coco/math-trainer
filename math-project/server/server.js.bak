@@ -1,0 +1,352 @@
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const db = require('./db');
+const authRoutes = require('./routes/auth');
+const gameRoutes = require('./routes/game');
+
+const app = express();
+
+// CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'http://localhost:3000');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.use(express.json());
+
+// Список трофеев
+const TROPHIES = [
+  // Башня
+  { id: 'tower_10', name: '🏰 Высотник', desc: 'Достиг 10 этажа в Башне', condition: (score, level) => level >= 10 },
+  { id: 'tower_25', name: '🏰 Архитектор', desc: 'Достиг 25 этажа в Башне', condition: (score, level) => level >= 25 },
+  { id: 'tower_50', name: '🏰 Легенда', desc: 'Достиг 50 этажа в Башне', condition: (score, level) => level >= 50 },
+  
+  // Спринт
+  { id: 'sprint_500', name: '⚡ Спринтер', desc: 'Набрал 500 очков в Спринте', condition: (score, level) => score >= 500 },
+  { id: 'sprint_1000', name: '⚡ Ураган', desc: 'Набрал 1000 очков в Спринте', condition: (score, level) => score >= 1000 },
+  
+  // Дуэль
+  { id: 'duel_5', name: '🤝 Победитель', desc: 'Выиграл 5 дуэлей', condition: (score, level, wins) => wins >= 5 },
+  { id: 'duel_10', name: '🤝 Чемпион', desc: 'Выиграл 10 дуэлей', condition: (score, level, wins) => wins >= 10 },
+  
+  // Почтальон
+  { id: 'postman_50', name: '📦 Почтальон', desc: '50 посылок без ошибок', condition: (score, level, correct) => correct >= 50 },
+  { id: 'postman_100', name: '📦 Мастер', desc: '100 посылок без ошибок', condition: (score, level, correct) => correct >= 100 },
+];
+
+// Функция проверки трофеев
+async function checkAndAwardTrophies(userId, gameType, score, level, correct, wins) {
+  console.log('🔥🔥🔥 ФУНКЦИЯ ВЫЗВАНА! 🔥🔥🔥');
+  console.log('📦 Параметры:', { userId, gameType, score, level, correct, wins });
+  console.log('🏆 НАЧАЛО ПРОВЕРКИ ТРОФЕЕВ для user', userId, 'игра', gameType, 'счет', score);
+  
+  try {
+    // Получаем уже имеющиеся трофеи
+    const earned = await db.allAsync('SELECT trophy_id FROM trophies WHERE user_id = ?', [userId]);
+    const earnedIds = earned.map(e => e.trophy_id);
+    console.log('🏆 Уже есть трофеи:', earnedIds);
+
+    // Проверяем каждый трофей
+    for (const trophy of TROPHIES) {
+      console.log('🏆 Проверяем трофей:', trophy.id);
+      
+      if (earnedIds.includes(trophy.id)) {
+        console.log('🏆 Трофей уже есть, пропускаем');
+        continue;
+      }
+
+      let awarded = false;
+      if (trophy.id.startsWith('tower') && gameType === 'tower') {
+        awarded = trophy.condition(score, level);
+      } else if (trophy.id.startsWith('sprint') && gameType === 'sprint') {
+        awarded = trophy.condition(score, level);
+      } else if (trophy.id.startsWith('duel') && gameType === 'duel') {
+        awarded = trophy.condition(score, level, wins);
+      } else if (trophy.id.startsWith('postman') && gameType === 'postman') {
+        awarded = trophy.condition(score, level, correct);
+      }
+
+    }
+  } catch (error) {
+    console.error('❌ Ошибка при проверке трофеев:', error);
+  }
+  console.log('🏆 КОНЕЦ ПРОВЕРКИ ТРОФЕЕВ');
+}
+
+// Роуты
+app.use('/api/auth', authRoutes);
+app.use('/api/game', gameRoutes);
+
+// Поиск пользователей
+app.get('/api/users/search', async (req, res) => {
+  try {
+    const { query } = req.query;
+    const users = await db.allAsync(
+      'SELECT id, username FROM users WHERE username LIKE ? LIMIT 10',
+      [`%${query}%`]
+    );
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Таблица лидеров
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const rows = await db.allAsync(`
+      SELECT username, total_score, games_played 
+      FROM leaderboard 
+      ORDER BY total_score DESC 
+      LIMIT 10
+    `);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Друзья
+app.post('/api/friends/request', async (req, res) => {
+  try {
+    const { userId, friendName } = req.body;
+    
+    const friend = await db.getAsync('SELECT id FROM users WHERE username = ?', [friendName]);
+    if (!friend) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    const existing = await db.getAsync(
+      'SELECT * FROM friends WHERE user_id = ? AND friend_id = ?',
+      [userId, friend.id]
+    );
+    
+    if (existing) {
+      return res.status(400).json({ error: 'Заявка уже существует' });
+    }
+    
+    await db.runAsync(
+      'INSERT INTO friends (user_id, friend_id, status) VALUES (?, ?, ?)',
+      [userId, friend.id, 'pending']
+    );
+    
+    res.json({ success: true, message: 'Заявка отправлена' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/friends/accept/:requestId', async (req, res) => {
+  try {
+    await db.runAsync(
+      'UPDATE friends SET status = ? WHERE id = ?',
+      ['accepted', req.params.requestId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/friends/list/:userId', async (req, res) => {
+  try {
+    const friends = await db.allAsync(`
+      SELECT u.id, u.username 
+      FROM friends f
+      JOIN users u ON f.friend_id = u.id
+      WHERE f.user_id = ? AND f.status = 'accepted'
+    `, [req.params.userId]);
+    res.json(friends);
+  } catch (error) {
+    res.json([]);
+  }
+});
+
+app.get('/api/friends/requests/:userId', async (req, res) => {
+  try {
+    const requests = await db.allAsync(`
+      SELECT f.rowid as id, u.username as fromName
+      FROM friends f
+      JOIN users u ON f.user_id = u.id
+      WHERE f.friend_id = ? AND f.status = 'pending'
+    `, [req.params.userId]);
+    res.json(requests);
+  } catch (error) {
+    res.json([]);
+  }
+});
+
+app.delete('/api/friends/:userId/:friendId', async (req, res) => {
+  try {
+    await db.runAsync(
+      'DELETE FROM friends WHERE user_id = ? AND friend_id = ?',
+      [req.params.userId, req.params.friendId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Сохранение игры
+// Сохранение игры
+app.post('/api/game/save', async (req, res) => {
+  console.log('🔥🔥🔥 НАЧАЛО СОХРАНЕНИЯ');
+  const { userId, gameType, mode, score, level, correct, total } = req.body;
+  const finalGameType = gameType || mode || 'unknown';
+
+  // 1. Сохраняем результат
+  try {
+    await db.runAsync(
+      'INSERT INTO game_scores (user_id, game_type, score, level, correct, total) VALUES (?, ?, ?, ?, ?, ?)',
+      [userId, finalGameType, score, level || 1, correct || 0, total || 0]
+    );
+    console.log('✅ Сохранено в game_scores');
+  } catch (e) {
+    console.error('❌ Ошибка сохранения:', e.message);
+  }
+
+  // 2. Проверяем трофеи — простой и понятный код
+  try {
+    console.log('🏆 Проверка трофеев...');
+
+    // Достаём уже полученные трофеи
+    const rows = await db.allAsync('SELECT trophy_id FROM trophies WHERE user_id = ?', [userId]);
+    const earned = rows.map(r => r.trophy_id);
+    console.log('📦 Уже есть:', earned);
+
+    // Спринт
+    if (finalGameType === 'sprint') {
+      if (score >= 500 && !earned.includes('sprint_500')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'sprint_500', '⚡ Спринтер']
+        );
+        console.log('✅ Трофей "Спринтер" выдан');
+      }
+      if (score >= 1000 && !earned.includes('sprint_1000')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'sprint_1000', '⚡ Ураган']
+        );
+        console.log('✅ Трофей "Ураган" выдан');
+      }
+    }
+
+    // Башня
+    if (finalGameType === 'tower') {
+      if (level >= 10 && !earned.includes('tower_10')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'tower_10', '🏰 Высотник']
+        );
+        console.log('✅ Трофей "Высотник" выдан');
+      }
+      if (level >= 25 && !earned.includes('tower_25')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'tower_25', '🏰 Архитектор']
+        );
+        console.log('✅ Трофей "Архитектор" выдан');
+      }
+      if (level >= 50 && !earned.includes('tower_50')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'tower_50', '🏰 Легенда']
+        );
+        console.log('✅ Трофей "Легенда" выдан');
+      }
+    }
+
+    // Почтальон (если есть)
+    if (finalGameType === 'postman') {
+      if (correct >= 50 && !earned.includes('postman_50')) {
+        await db.runAsync(
+          'INSERT INTO trophies (user_id, trophy_id, trophy_name) VALUES (?, ?, ?)',
+          [userId, 'postman_50', '📦 Почтальон']
+        );
+        console.log('✅ Трофей "Почтальон" выдан');
+      }
+    }
+
+    // Дуэль (если есть)
+    // аналогично
+
+  } catch (e) {
+    console.error('❌ Ошибка при проверке трофеев:', e.message);
+  }
+
+  res.json({ success: true });
+});// Статистика
+app.get('/api/game/stats/:userId', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    
+    const stats = await db.getAsync(`
+      SELECT 
+        COUNT(*) as games,
+        SUM(score) as score,
+        SUM(correct) as correct,
+        SUM(total) as total
+      FROM game_scores 
+      WHERE user_id = ?
+    `, [userId]);
+    
+    const history = await db.allAsync(`
+      SELECT game_type as mode, score, correct, total, played_at as date
+      FROM game_scores 
+      WHERE user_id = ?
+      ORDER BY played_at DESC 
+      LIMIT 10
+    `, [userId]);
+    
+    res.json({
+      stats: {
+        score: stats?.score || 0,
+        games: stats?.games || 0,
+        correct: stats?.correct || 0,
+        total: stats?.total || 0
+      },
+      history: history || []
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка статистики:', error);
+    res.status(500).json({ 
+      stats: { score: 0, games: 0, correct: 0, total: 0 },
+      history: [] 
+    });
+  }
+});
+
+// Трофеи пользователя
+app.get('/api/trophies/:userId', async (req, res) => {
+  try {
+    const trophies = await db.allAsync(
+      'SELECT trophy_id, trophy_name, earned_at FROM trophies WHERE user_id = ? ORDER BY earned_at DESC',
+      [req.params.userId]
+    );
+    res.json(trophies);
+  } catch (error) {
+    console.error('❌ Ошибка получения трофеев:', error);
+    res.json([]);
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Сервер запущен на http://localhost:${PORT}`);
+  console.log('✅ CORS настроен для http://localhost:3000');
+  console.log('✅ База данных подключена');
+});

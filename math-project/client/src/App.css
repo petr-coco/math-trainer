@@ -1,0 +1,87 @@
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Глобальный адаптив */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+  }
+
+  .app-header {
+    padding: 12px 15px;
+  }
+
+  .app-header h1 {
+    font-size: 20px;
+  }
+
+  .navigation {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .nav-btn {
+    flex: 1;
+    min-width: 60px;
+    padding: 8px;
+    font-size: 12px;
+  }
+
+  .app-main {
+    padding: 15px;
+  }
+}
+
+/* Для очень маленьких экранов */
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trophies-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .game-card {
+    padding: 15px;
+  }
+
+  .stat-card {
+    padding: 12px;
+  }
+}
