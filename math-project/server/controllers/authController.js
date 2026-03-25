@@ -2,8 +2,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 
-// УДАЛЯЕМ guestLogin ПОЛНОСТЬЮ!
-
 // Регистрация
 exports.register = async (req, res) => {
     try {
